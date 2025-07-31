@@ -638,9 +638,9 @@
                         }
                     }
                      if (contentStartIndex === lines.length && Object.keys(metadata).length > 0) {
-                        contentStartIndex = 0;
-                        for (const key in metadata) { delete metadata[key]; }
-                    }
+                         contentStartIndex = 0;
+                         for (const key in metadata) { delete metadata[key]; }
+                     }
 
                     const contentStr = lines.slice(contentStartIndex).join('\n').trim();
                     const metaHeader = lines.slice(0, contentStartIndex).join('\n') + (contentStartIndex > 0 ? '\n' : '');
@@ -805,6 +805,94 @@
                 }
 
                 // ***************************************************************
+                // ** AI ENHANCEMENT LOGIC (NEWLY ADDED) **
+                // ***************************************************************
+
+                async enhanceWithAI() {
+                    const rawText = document.getElementById('questionInput').value;
+                    const apiKey = document.getElementById('apiKey').value.trim();
+
+                    if (!rawText.trim()) {
+                        this.showMessage(this.language === 'ar' ? 'الرجاء إدخال نص لتحسينه.' : 'Please enter text to enhance.', 'warning');
+                        return;
+                    }
+
+                    if (!apiKey) {
+                        this.showMessage(this.language === 'ar' ? 'الرجاء إدخال مفتاح Gemini API.' : 'Please enter your Gemini API key.', 'error');
+                        return;
+                    }
+
+                    this.setLoading(true, this.language === 'ar' ? 'جاري التحسين بالـ AI...' : 'Enhancing with AI...');
+
+                    try {
+                        const prompt = `
+You are an expert question editor. Review the following block of questions. Your task is to:
+1. Correct any grammatical errors, spelling mistakes, or awkward phrasing.
+2. Ensure the question structure is clear and unambiguous.
+3. For multiple-choice questions, verify that there is one clear correct answer and plausible distractors.
+4. Maintain the original intent and difficulty of the questions.
+5. **Crucially, you must return the output in the exact same format as the input**, using the same metadata keys (like 'id', 'type') and content tags (like '[STEM]', '[CHOICES]', '[ANSWER]', '[PART]', etc.). Do not add or remove tags. Separate questions with '---'.
+
+Here is the text to enhance:
+---
+${rawText}
+---
+`;
+
+                        const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=${apiKey}`;
+                        const payload = {
+                            contents: [{
+                                parts: [{ text: prompt }]
+                            }]
+                        };
+
+                        const response = await fetch(apiUrl, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(payload)
+                        });
+
+                        if (!response.ok) {
+                            const errorData = await response.json();
+                            throw new Error(errorData.error.message || `API request failed with status ${response.status}`);
+                        }
+
+                        const result = await response.json();
+                        
+                        if (result.candidates && result.candidates.length > 0 && result.candidates[0].content.parts.length > 0) {
+                            const enhancedText = result.candidates[0].content.parts[0].text;
+                            document.getElementById('questionInput').value = enhancedText;
+                            this.showMessage(this.language === 'ar' ? 'تم التحسين بنجاح! جاري إعادة التحليل...' : 'Enhancement successful! Re-analyzing...', 'success');
+                            // Automatically re-run smart analysis on the new text
+                            this.smartAnalyze();
+                        } else {
+                             throw new Error("Received an empty or invalid response from the AI.");
+                        }
+
+                    } catch (error) {
+                        console.error("AI Enhancement Error:", error);
+                        this.showMessage(`${this.language === 'ar' ? 'فشل التحسين بالـ AI: ' : 'AI Enhancement Failed: '}${error.message}`, 'error');
+                    } finally {
+                        this.setLoading(false);
+                    }
+                }
+
+                setLoading(isLoading, text) {
+                    const loadingDiv = document.getElementById('loading');
+                    const loadingText = document.getElementById('loading-text');
+                    if (isLoading) {
+                        loadingDiv.style.display = 'block';
+                        loadingText.textContent = text;
+                    } else {
+                        loadingDiv.style.display = 'none';
+                    }
+                    document.getElementById('smart-analyze-btn').disabled = isLoading;
+                    document.getElementById('aiEnhanceBtn').disabled = isLoading;
+                    document.getElementById('convert-json-btn').disabled = isLoading;
+                }
+
+
+                // ***************************************************************
                 // ** HTML & JSON TRANSFORMATION LOGIC **
                 // ***************************************************************
 
@@ -922,15 +1010,46 @@
                             partJson.choices = (part.choices || []).map((choice, i) => ({
                                 type: correctAnswers.has(i) ? 'key' : 'distractor',
                                 html_content: this.processTextForHtml(choice, lang),
-                                index: i, fixed_order: i + 1, group: 1, values: [], unit: null, last_order: false,
+                                index: i, 
+                                fixed_order: i + 1, 
+                                group: 1, 
+                                values: [], 
+                                unit: null, 
+                                last_order: false,
                                 correct_order: part.type === 'oq' ? i + 1 : undefined
                             }));
                             if (part.type === 'oq') partJson.direction = "vertical";
                             break;
                         case 'matching':
                             partJson.choices = [];
-                            (part.group1 || []).forEach((item, i) => { partJson.choices.push({ type: 'distractor', group: 1, index: i, fixed_order: i + 1, html_content: this.processTextForHtml(item, lang), correct_order: i + 1 }); });
-                            (part.group2 || []).forEach((item, i) => { partJson.choices.push({ type: 'distractor', group: 2, index: i + (part.group1?.length || 0), fixed_order: i + 1 + (part.group1?.length || 0), html_content: this.processTextForHtml(item, lang), correct_order: i + 1 }); });
+                            (part.group1 || []).forEach((item, i) => { 
+                                partJson.choices.push({ 
+                                    type: 'distractor', 
+                                    group: 1, 
+                                    index: i, 
+                                    fixed_order: i + 1, 
+                                    html_content: this.processTextForHtml(item, lang), 
+                                    correct_order: i + 1,
+                                    // ADDED MISSING FIELDS
+                                    values: [],
+                                    unit: null,
+                                    last_order: false
+                                }); 
+                            });
+                            (part.group2 || []).forEach((item, i) => { 
+                                partJson.choices.push({ 
+                                    type: 'distractor', 
+                                    group: 2, 
+                                    index: i + (part.group1?.length || 0), 
+                                    fixed_order: i + 1 + (part.group1?.length || 0), 
+                                    html_content: this.processTextForHtml(item, lang), 
+                                    correct_order: i + 1,
+                                    // ADDED MISSING FIELDS
+                                    values: [],
+                                    unit: null,
+                                    last_order: false
+                                }); 
+                            });
                             break;
                         case 'gapText':
                             partJson.gap_text_keys = (part.answers || []).map(ans => ({ value: ans.value, correct_order: ans.order }));
@@ -997,9 +1116,9 @@
                     const questionIdText = (csvRow && csvRow['Question Id']) ? csvRow['Question Id'] : q.metadata.id;
 
                     let html = `<div class="question-actions">
-                        <button class="action-btn edit-btn" title="تعديل">✏️</button>
-                        <button class="action-btn delete-btn" title="حذف">🗑️</button>
-                    </div>`;
+                                <button class="action-btn edit-btn" title="تعديل">✏️</button>
+                                <button class="action-btn delete-btn" title="حذف">🗑️</button>
+                            </div>`;
 
                     if (q.statement) {
                         html += `<div class="statement-preview">${this.processTextForHtml(q.statement, lang)}</div>`;
@@ -1031,9 +1150,9 @@
                     const contentToEdit = q._contentBlock || '';
                     let html = `<textarea class="edit-textarea" id="edit-q-text-${q.metadata.id}">${contentToEdit}</textarea>`;
                     html += `<div style="margin-top:10px;display:flex;gap:10px;">
-                        <button class="btn btn-success btn-save-edit">💾 حفظ</button>
-                        <button class="btn btn-secondary btn-cancel-edit">❌ إلغاء</button>
-                    </div>`;
+                                <button class="btn btn-success btn-save-edit">💾 حفظ</button>
+                                <button class="btn btn-secondary btn-cancel-edit">❌ إلغاء</button>
+                            </div>`;
                     return html;
                 }
                 
@@ -1239,7 +1358,7 @@
                 
                 saveSettings() { localStorage.setItem('aiq_settings', JSON.stringify({ language: this.language, customization: this.customization })); }
                 loadSettings() { try { const settings = JSON.parse(localStorage.getItem('aiq_settings')); if (settings) { if (settings.language) this.language = settings.language; if (settings.customization) this.customization = settings.customization; } } catch {} }
-                saveApiKey() { localStorage.setItem('aiq_api_key', document.getElementById('apiKey').value.trim()); }
+                saveApiKey() { this.apiKey = document.getElementById('apiKey').value.trim(); localStorage.setItem('aiq_api_key', this.apiKey); }
                 loadApiKey() { const apiKey = localStorage.getItem('aiq_api_key'); if (apiKey) { this.apiKey = apiKey; document.getElementById('apiKey').value = apiKey; } }
                 
                 openCSVModal() {
